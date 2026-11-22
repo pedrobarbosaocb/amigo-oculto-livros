@@ -2,11 +2,11 @@
 // Backend: Supabase (RPCs ao_* sobre o schema privado "ao", ver supabase/migrations)
 // quando config.js traz URL e chave; senão, modo local (localStorage, só neste navegador).
 //
-// Rotas (hash, para funcionar no GitHub Pages sem servidor):
-//   #/                       criar grupo + meus grupos
+// Rotas (hash, funciona em qualquer hospedagem estática):
+//   #/                        criar grupo + meus grupos
 //   #/admin/<grupo>[/<chave>] painel do organizador
-//   #/g/<grupo>              convite: entrar no grupo
-//   #/me/<membro>[/<chave>]  página pessoal: revela quem a pessoa tirou
+//   #/g/<grupo>               convite: entrar no grupo
+//   #/me/<membro>[/<chave>]   página pessoal: revela quem a pessoa tirou
 
 // =========================================================================
 // 1. UTILITÁRIOS
@@ -16,6 +16,8 @@ const $status = document.getElementById('status');
 const $toast = document.getElementById('toast');
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const ic = name => `<i data-lucide="${name}"></i>`;
+const drawIcons = () => window.lucide?.createIcons();
 
 function newKey(len = 32) {
     const alphabet = '0123456789abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ';
@@ -47,40 +49,41 @@ const adminLink = (gid, key) => `${base()}#/admin/${gid}/${key}`;
 const meLink = (mid, key) => `${base()}#/me/${mid}/${key}`;
 
 let toastTimer;
-function toast(msg) {
-    $toast.textContent = msg;
+function toast(msg, icon = 'check') {
+    $toast.innerHTML = `${ic(icon)}<span>${esc(msg)}</span>`;
+    drawIcons();
     $toast.classList.add('show');
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => $toast.classList.remove('show'), 2400);
 }
 
 async function copy(text) {
-    try { await navigator.clipboard.writeText(text); toast('Link copiado'); }
-    catch { toast('Não deu para copiar: selecione o link e copie'); }
+    try { await navigator.clipboard.writeText(text); toast('Copiado', 'copy'); }
+    catch { toast('Selecione e copie', 'circle-alert'); }
 }
 
 const ERRORS = {
-    bad_name: 'Confira o nome (até 40 caracteres; o do grupo, até 80).',
+    bad_name: 'Nome até 40 caracteres (grupo: 80).',
     bad_details: 'Texto longo demais.',
-    bad_wishes: 'A lista de desejos pode ter até 1000 caracteres.',
-    bad_key: 'Chave inválida. Recarregue a página.',
-    throttled: 'Muitas tentativas. Espere alguns minutos.',
-    not_found: 'Grupo não encontrado. Confira o link.',
-    forbidden: 'Este link não dá acesso. Confira se copiou o link inteiro.',
+    bad_wishes: 'Até 1000 caracteres.',
+    bad_key: 'Recarregue a página.',
+    throttled: 'Muitas tentativas. Espere um pouco.',
+    not_found: 'Grupo não encontrado.',
+    forbidden: 'Link sem acesso. Copiou inteiro?',
     already_drawn: 'O sorteio já foi feito.',
-    full: 'O grupo chegou ao limite de 100 pessoas.',
-    name_taken: 'Já tem alguém com esse nome no grupo. Use sobrenome ou apelido.',
-    too_few: 'São precisas pelo menos 3 pessoas para sortear.',
-    network: 'Sem conexão com o servidor. Tente de novo.'
+    full: 'Limite de 100 pessoas.',
+    name_taken: 'Esse nome já está no grupo.',
+    too_few: 'Mínimo de 3 pessoas.',
+    network: 'Sem conexão. Tente de novo.'
 };
 const errMsg = e => ERRORS[e?.message] || ERRORS.network;
 
 const fmtDate = iso => iso ? new Date(iso).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : '';
-const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 
 function setStatus(ok, text) {
     $status.classList.toggle('ok', ok);
-    $status.querySelector('span').textContent = text;
+    $status.title = text;
+    $status.setAttribute('aria-label', text);
 }
 
 // =========================================================================
@@ -227,6 +230,7 @@ function createLocalBackend() {
     };
 }
 
+
 // =========================================================================
 // 3. ROTEAMENTO E ATUALIZAÇÃO AO VIVO
 // =========================================================================
@@ -261,63 +265,96 @@ async function route() {
     }
 }
 
-// não atropela quem está digitando: só redesenha se nenhum campo do formulário estiver em foco/alterado
-const isEditing = () => !!$app.querySelector('form[data-dirty="1"]') || ['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName);
-
-function trackDirty(form) {
-    form.addEventListener('input', () => { form.dataset.dirty = '1'; });
+function paint(html) {
+    $app.innerHTML = html;
+    drawIcons();
+    $app.querySelectorAll('[data-copy]').forEach(b => b.addEventListener('click', () => copy(b.dataset.copy)));
+    $app.querySelectorAll('[data-toggle]').forEach(b => b.addEventListener('click', () => {
+        document.getElementById(b.dataset.toggle)?.classList.toggle('hidden');
+    }));
 }
 
-// botão de confirmação em dois toques (sem confirm() do navegador)
-function confirmButton(btn, label, action) {
+// não atropela quem está digitando
+const isEditing = () => !!$app.querySelector('form[data-dirty="1"]') || ['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName);
+const trackDirty = form => form.addEventListener('input', () => { form.dataset.dirty = '1'; });
+
+// confirmação em dois toques (sem confirm() do navegador)
+function confirmButton(btn, armedHtml, action) {
     let armed = false, timer;
     const original = btn.innerHTML;
+    const reset = () => { armed = false; btn.classList.remove('armed'); btn.innerHTML = original; };
     btn.addEventListener('click', async () => {
         if (!armed) {
-            armed = true; btn.textContent = label;
-            timer = setTimeout(() => { armed = false; btn.innerHTML = original; }, 4000);
+            armed = true; btn.classList.add('armed'); btn.innerHTML = armedHtml; drawIcons();
+            timer = setTimeout(reset, 4000);
             return;
         }
         clearTimeout(timer); btn.disabled = true;
-        try { await action(); } catch (e) { toast(errMsg(e)); btn.disabled = false; armed = false; btn.innerHTML = original; }
+        try { await action(); } catch (e) { toast(errMsg(e), 'circle-alert'); btn.disabled = false; reset(); }
     });
 }
 
-function bindCopies() {
-    $app.querySelectorAll('[data-copy]').forEach(b => b.addEventListener('click', () => copy(b.dataset.copy)));
-}
+// ---- pedaços de tela
 
-const copyBox = (label, value, hint = '') => `
-    <div class="field">
-        <label>${label}</label>
-        <div class="copybox"><input type="text" readonly value="${esc(value)}" onfocus="this.select()"><button type="button" class="ghost" data-copy="${esc(value)}">Copiar</button></div>
-        ${hint ? `<p class="small muted" style="margin-top:6px">${hint}</p>` : ''}
+const PASTELS = ['c-lilac', 'c-mint', 'c-peach', 'c-sky', 'c-butter', 'c-rose'];
+const tint = i => PASTELS[i % PASTELS.length];
+const initial = name => esc((name.trim()[0] || '?').toUpperCase());
+
+const copyRow = (value, iconName = 'link', extra = '') => `
+    <div class="row">
+        <label class="in" style="flex:1">${ic(iconName)}<input type="text" readonly value="${esc(value)}" onfocus="this.select()" aria-label="Link"></label>
+        <button type="button" class="icon-btn" data-copy="${esc(value)}" title="Copiar" aria-label="Copiar">${ic('copy')}</button>
+        ${extra}
     </div>`;
 
-function groupHeader(g) {
-    const meta = [
-        g.eventDate && `📅 ${esc(g.eventDate)}`,
-        g.budget && `💸 ${esc(g.budget)}`,
-        `👥 ${plural(g.members.length, 'pessoa', 'pessoas')}`
-    ].filter(Boolean).join('</span><span>');
-    return `
-        <p class="small muted" style="margin:0 0 4px">Amigo oculto de livros</p>
-        <h1>${esc(g.name)}</h1>
-        <div class="meta"><span>${meta}</span></div>
-        ${g.details ? `<p class="muted" style="white-space:pre-wrap">${esc(g.details)}</p>` : ''}`;
+function chips(g, extra = '') {
+    const c = [
+        g.eventDate && `<span class="chip c-sky" title="Data">${ic('calendar')}${esc(g.eventDate)}</span>`,
+        g.budget && `<span class="chip c-butter" title="Valor">${ic('wallet')}${esc(g.budget)}</span>`,
+        `<span class="chip c-peach" title="Participantes">${ic('users')}${g.members.length}</span>`,
+        g.status === 'drawn'
+            ? `<span class="chip c-lilac" title="Sorteado em ${esc(fmtDate(g.drawnAt))}">${ic('sparkles')}sorteado</span>`
+            : `<span class="chip c-mint" title="Inscrições abertas">${ic('lock-open')}aberto</span>`
+    ].filter(Boolean).join('');
+    return `<div class="chips">${extra}${c}</div>`;
 }
 
-const peopleList = (ms, extra = () => '') => ms.length
-    ? `<ul class="people">${ms.map(m => `<li><span>${esc(m.name)}</span>${extra(m)}</li>`).join('')}</ul>`
-    : '<p class="muted">Ninguém entrou ainda.</p>';
+const hero = (g, extra = '') => `
+    <div class="hero">
+        <h1>${esc(g.name)}</h1>
+        ${chips(g, extra)}
+        ${g.details ? `<p class="muted small" style="white-space:pre-wrap;max-width:44ch">${esc(g.details)}</p>` : ''}
+    </div>`;
+
+function people(ms, { meId = null, removable = false } = {}) {
+    if (!ms.length) return `<p class="muted center small">${ic('user-plus')}</p>`;
+    return `<ul class="people">${ms.map((m, i) => `
+        <li class="${m.id === meId ? 'me' : ''}">
+            <span class="av ${tint(i)}">${initial(m.name)}</span><span class="nm">${esc(m.name)}</span>
+            ${removable ? `<button type="button" data-remove="${esc(m.id)}" title="Remover ${esc(m.name)}" aria-label="Remover ${esc(m.name)}">${ic('x')}</button>` : ''}
+        </li>`).join('')}</ul>`;
+}
+
+const sectionTitle = (icon, text, right = '') =>
+    `<div class="spread" style="margin-bottom:12px"><h2 class="row">${ic(icon)}${text}</h2>${right}</div>`;
+
+const groupFields = (g = {}) => `
+    <label class="in">${ic('book-heart')}<input name="name" type="text" maxlength="80" required placeholder="Nome do grupo" aria-label="Nome do grupo" value="${esc(g.name || '')}"></label>
+    <div class="grid2">
+        <label class="in">${ic('calendar')}<input name="eventDate" type="text" maxlength="40" placeholder="Data" aria-label="Data da troca" value="${esc(g.eventDate || '')}"></label>
+        <label class="in">${ic('wallet')}<input name="budget" type="text" maxlength="40" placeholder="Valor" aria-label="Valor" value="${esc(g.budget || '')}"></label>
+    </div>
+    <label class="in top">${ic('scroll-text')}<textarea name="details" maxlength="600" placeholder="Regras (opcional)" aria-label="Regras e recados">${esc(g.details || '')}</textarea></label>`;
+
+const readGroupForm = form => Object.fromEntries(['name', 'eventDate', 'budget', 'details'].map(k => [k, form.elements[k].value]));
 
 function viewError(msg) {
-    $app.innerHTML = `
-        <div class="card center">
-            <h2>Ops</h2>
-            <p class="muted">${esc(msg)}</p>
-            <a class="btn" href="#/">Ir para o início</a>
-        </div>`;
+    paint(`
+        <div class="card center stack" style="justify-items:center">
+            <span class="chip c-rose">${ic('circle-alert')}</span>
+            <p>${esc(msg)}</p>
+            <a class="btn" href="#/" aria-label="Início">${ic('house')}</a>
+        </div>`);
 }
 
 // =========================================================================
@@ -328,62 +365,38 @@ function viewHome() {
     const myMember = Object.entries(members());
     const mine = myAdmin.length || myMember.length ? `
         <section class="card">
-            <h2>Seus grupos neste aparelho</h2>
+            ${sectionTitle('bookmark', 'Seus grupos')}
             <div class="list-groups">
-                ${myAdmin.map(([gid, a]) => `<a href="#/admin/${esc(gid)}"><span>${esc(a.name || gid)}</span><span class="pill">organizador</span></a>`).join('')}
-                ${myMember.map(([mid, m]) => `<a href="#/me/${esc(mid)}"><span>${esc(m.groupName || 'Grupo')} <span class="muted">· ${esc(m.name)}</span></span><span class="pill go">participante</span></a>`).join('')}
+                ${myAdmin.map(([gid, a]) => `<a href="#/admin/${esc(gid)}"><span class="ic c-lilac" title="Organizador">${ic('crown')}</span><span>${esc(a.name || gid)}</span></a>`).join('')}
+                ${myMember.map(([mid, m]) => `<a href="#/me/${esc(mid)}"><span class="ic c-mint" title="Participante">${ic('book-open')}</span><span>${esc(m.groupName || 'Grupo')}<br><span class="sub">${esc(m.name)}</span></span></a>`).join('')}
             </div>
         </section>` : '';
 
-    $app.innerHTML = `
-        <h1>Troque livros sem estragar a surpresa</h1>
-        <p class="lead">Você cria o grupo, manda o link, cada pessoa se cadastra com os livros que gostaria de ganhar e você dispara o sorteio. Cada participante vê só quem tirou. Nem você fica sabendo.</p>
-        ${mine}
-        <section class="card">
-            <h2>Criar um amigo oculto</h2>
-            <form id="create">
-                <div class="field">
-                    <label for="g-name">Nome do grupo</label>
-                    <input id="g-name" type="text" maxlength="80" required placeholder="Ex.: Clube do Livro, Natal 2026">
-                </div>
-                <div class="row">
-                    <div class="field">
-                        <label for="g-date">Data da troca <span class="opt">(opcional)</span></label>
-                        <input id="g-date" type="text" maxlength="40" placeholder="Ex.: 20/12, 19h">
-                    </div>
-                    <div class="field">
-                        <label for="g-budget">Valor <span class="opt">(opcional)</span></label>
-                        <input id="g-budget" type="text" maxlength="40" placeholder="Ex.: até R$ 80">
-                    </div>
-                </div>
-                <div class="field">
-                    <label for="g-details">Regras e recados <span class="opt">(opcional)</span></label>
-                    <textarea id="g-details" maxlength="600" placeholder="Ex.: Pode ser livro usado em bom estado. Embrulhe e escreva uma dedicatória!"></textarea>
-                </div>
-                <div class="actions"><button type="submit">Criar grupo</button></div>
+    paint(`
+        <div class="stack">
+            <div class="hero">
+                <h1>Amigo oculto de livros</h1>
+                <p class="muted">Só você vê quem tirou.</p>
+            </div>
+            <div class="steps" aria-label="Como funciona">
+                <div><span class="ic c-sky">${ic('link')}</span>Convite</div>
+                <div><span class="ic c-peach">${ic('user-plus')}</span>Cadastro</div>
+                <div><span class="ic c-butter">${ic('dices')}</span>Sorteio</div>
+                <div><span class="ic c-rose">${ic('gift')}</span>Surpresa</div>
+            </div>
+            ${mine}
+            <form id="create" class="card stack">
+                ${groupFields()}
+                <button type="submit" class="wide">${ic('plus')}Criar grupo</button>
                 <p class="error" id="create-err"></p>
             </form>
-        </section>
-        <section class="card">
-            <h2>Como funciona</h2>
-            <ol class="steps">
-                <li>Você cria o grupo e recebe dois links: o <b>convite</b> (para a turma) e o seu <b>link de organizador</b>.</li>
-                <li>Cada pessoa abre o convite, coloca o nome e os livros ou gêneros que curte.</li>
-                <li>Com todo mundo dentro, você toca em <b>Sortear</b>.</li>
-                <li>Cada participante abre a própria página e descobre quem tirou, com a lista de desejos da pessoa.</li>
-            </ol>
-        </section>`;
+        </div>`);
 
     const form = document.getElementById('create');
     form.addEventListener('submit', async ev => {
         ev.preventDefault();
         const btn = form.querySelector('button[type=submit]');
-        const f = {
-            name: document.getElementById('g-name').value,
-            eventDate: document.getElementById('g-date').value,
-            budget: document.getElementById('g-budget').value,
-            details: document.getElementById('g-details').value
-        };
+        const f = readGroupForm(form);
         const key = newKey();
         btn.disabled = true;
         try {
@@ -403,110 +416,98 @@ async function viewAdmin(gid, keyFromUrl) {
         history.replaceState(null, '', `#/admin/${gid}`);
     }
     const key = admins()[gid]?.key;
-    if (!key) return viewError('Este aparelho não tem a chave de organizador deste grupo. Abra o link de organizador que você guardou.');
+    if (!key) return viewError('Abra o seu link de organizador neste aparelho.');
 
     let g = await backend.admin(gid, key);
     saveAdmin(gid, { name: g.name });
     let last = '';
-    let editingDetails = false;
+    let editing = false;
 
     const render = () => {
         last = JSON.stringify(g);
         const drawn = g.status === 'drawn';
         const n = g.members.length;
-        $app.innerHTML = `
-            ${groupHeader(g)}
-            <p><span class="pill">organizador</span> <span class="pill ${drawn ? 'go' : ''}">${drawn ? 'sorteado' : 'inscrições abertas'}</span></p>
+        const wa = `https://wa.me/?text=${encodeURIComponent(`📚 ${g.name}\n${inviteLink(gid)}`)}`;
+        paint(`
+            <div class="stack">
+                ${hero(g, `<span class="chip c-lilac" title="Você organiza">${ic('crown')}</span>`)}
 
-            <section class="card">
                 ${drawn ? `
-                    <h2>Sorteio feito ✨</h2>
-                    <p>Feito em ${esc(fmtDate(g.drawnAt))} com ${plural(n, 'pessoa', 'pessoas')}. Cada uma vê quem tirou na própria página; os pares não aparecem aqui.</p>
-                    <p class="small muted">Se alguém não guardou o link pessoal, ele continua salvo no aparelho em que a pessoa se cadastrou.</p>
-                    <div class="actions"><button type="button" class="ghost" id="undraw">Desfazer sorteio</button></div>
-                    <p class="small muted" style="margin-top:10px">Desfazer reabre as inscrições e apaga os pares. Use só se precisar incluir ou tirar alguém; depois, sorteie de novo e avise o grupo.</p>
+                    <section class="card center stack" style="justify-items:center">
+                        <span class="chip c-lilac" style="padding:12px">${ic('sparkles')}</span>
+                        <p><b>Sorteado!</b> <span class="muted small">${esc(fmtDate(g.drawnAt))}</span></p>
+                        <p class="muted small">${ic('eye-off')} Nem você vê os pares.</p>
+                        <button type="button" class="icon-btn plain" id="undraw" title="Desfazer sorteio (reabre inscrições)" aria-label="Desfazer sorteio">${ic('rotate-ccw')}</button>
+                    </section>
                 ` : `
-                    <h2>Convide a turma</h2>
-                    ${copyBox('Link do convite', inviteLink(gid), 'Mande este link no grupo. Cada pessoa se cadastra pelo próprio celular.')}
-                    <div class="actions">
-                        <a class="btn ghost" target="_blank" rel="noopener" href="https://wa.me/?text=${encodeURIComponent(`📚 Amigo oculto de livros: ${g.name}\nEntre aqui e conte que livros você curte: ${inviteLink(gid)}`)}">Mandar no WhatsApp</a>
-                        <a class="btn ghost" href="#/g/${esc(gid)}">Participar também</a>
-                    </div>
+                    <section class="card">
+                        ${sectionTitle('send', 'Convite')}
+                        ${copyRow(inviteLink(gid), 'link', `
+                            <a class="btn icon-btn c-mint" href="${wa}" target="_blank" rel="noopener" title="Mandar no WhatsApp" aria-label="Mandar no WhatsApp">${ic('message-circle')}</a>`)}
+                    </section>
                 `}
-            </section>
 
-            <section class="card">
-                <div class="actions" style="justify-content:space-between;margin-bottom:8px">
-                    <h2 style="margin:0">Participantes (${n})</h2>
+                <section class="card">
+                    ${sectionTitle('users', `${n}`, drawn ? '' : `<a class="btn icon-btn sm c-sky" href="#/g/${esc(gid)}" title="Participar também" aria-label="Participar também">${ic('user-plus')}</a>`)}
+                    ${people(g.members, { removable: !drawn })}
+                    ${drawn ? '' : `
+                        <button type="button" id="draw" class="wide" style="margin-top:16px" ${n < 3 ? 'disabled' : ''} title="${n < 3 ? 'Mínimo de 3 pessoas' : 'Sortear'}">
+                            ${ic('dices')}Sortear${n < 3 ? ` <span class="small">(${n}/3)</span>` : ''}
+                        </button>`}
+                </section>
+
+                ${editing ? `
+                    <form id="details" class="card stack">
+                        ${groupFields(g)}
+                        <div class="row end">
+                            <button type="button" class="icon-btn plain" id="d-cancel" title="Cancelar" aria-label="Cancelar">${ic('x')}</button>
+                            <button type="submit" class="icon-btn" title="Salvar" aria-label="Salvar">${ic('check')}</button>
+                        </div>
+                        <p class="error" id="d-err"></p>
+                    </form>` : ''}
+
+                <div id="admin-key" class="card hidden">
+                    ${copyRow(adminLink(gid, key), 'key-round')}
+                    <p class="muted small" style="margin-top:8px">${ic('shield-alert')} Seu acesso de organizador. Não compartilhe.</p>
                 </div>
-                ${peopleList(g.members, m => drawn ? '' : `<button type="button" class="link" data-remove="${esc(m.id)}">remover</button>`)}
-                ${drawn ? '' : `
-                    <div class="actions" style="margin-top:18px">
-                        <button type="button" id="draw" ${n < 3 ? 'disabled' : ''}>🎲 Sortear agora</button>
-                        <span class="small muted">${n < 3 ? `Faltam ${3 - n} para poder sortear.` : 'Depois do sorteio as inscrições fecham.'}</span>
-                    </div>`}
-            </section>
 
-            <section class="card">
-                <h3>Detalhes do grupo</h3>
-                <div id="details-box">
-                    ${editingDetails ? `
-                        <form id="details">
-                            <div class="field"><label for="d-name">Nome</label><input id="d-name" type="text" maxlength="80" value="${esc(g.name)}"></div>
-                            <div class="row">
-                                <div class="field"><label for="d-date">Data</label><input id="d-date" type="text" maxlength="40" value="${esc(g.eventDate)}"></div>
-                                <div class="field"><label for="d-budget">Valor</label><input id="d-budget" type="text" maxlength="40" value="${esc(g.budget)}"></div>
-                            </div>
-                            <div class="field"><label for="d-details">Regras e recados</label><textarea id="d-details" maxlength="600">${esc(g.details)}</textarea></div>
-                            <div class="actions"><button type="submit">Salvar</button><button type="button" class="ghost" id="d-cancel">Cancelar</button></div>
-                            <p class="error" id="d-err"></p>
-                        </form>` : `<button type="button" class="ghost" id="edit-details">Editar nome, data, valor e regras</button>`}
+                <div class="row center">
+                    <button type="button" class="icon-btn plain" id="edit" title="Editar grupo" aria-label="Editar grupo">${ic('pencil')}</button>
+                    <button type="button" class="icon-btn plain" data-toggle="admin-key" title="Link de organizador" aria-label="Link de organizador">${ic('key-round')}</button>
                 </div>
-            </section>
-
-            <section class="card">
-                <h3>Seu acesso de organizador</h3>
-                ${copyBox('Link de organizador', adminLink(gid, admins()[gid].key), '<b>Não compartilhe.</b> Guarde este link para abrir o painel em outro aparelho.')}
-            </section>`;
-        bindCopies();
+            </div>`);
 
         $app.querySelectorAll('[data-remove]').forEach(b => {
             const name = g.members.find(m => m.id === b.dataset.remove)?.name || '';
-            confirmButton(b, `remover ${name}?`, async () => {
+            confirmButton(b, ic('check'), async () => {
                 await backend.remove(gid, key, b.dataset.remove);
-                toast(`${name} saiu do grupo`);
+                toast(name, 'user-minus');
                 await refresh(true);
             });
         });
         const drawBtn = document.getElementById('draw');
-        if (drawBtn) confirmButton(drawBtn, `Confirmar sorteio com ${n} pessoas`, async () => {
+        if (drawBtn) confirmButton(drawBtn, `${ic('check')}Confirmar (${n})`, async () => {
             await backend.draw(gid, key);
-            toast('Sorteio feito!');
+            toast('Sorteado!', 'sparkles');
             await refresh(true);
         });
         const undrawBtn = document.getElementById('undraw');
-        if (undrawBtn) confirmButton(undrawBtn, 'Tem certeza? Toque de novo', async () => {
+        if (undrawBtn) confirmButton(undrawBtn, ic('check'), async () => {
             await backend.undraw(gid, key);
-            toast('Sorteio desfeito; inscrições reabertas');
+            toast('Inscrições reabertas', 'lock-open');
             await refresh(true);
         });
-        document.getElementById('edit-details')?.addEventListener('click', () => { editingDetails = true; render(); });
-        document.getElementById('d-cancel')?.addEventListener('click', () => { editingDetails = false; render(); });
+        document.getElementById('edit').addEventListener('click', () => { editing = !editing; render(); });
+        document.getElementById('d-cancel')?.addEventListener('click', () => { editing = false; render(); });
         const df = document.getElementById('details');
         if (df) {
             trackDirty(df);
             df.addEventListener('submit', async ev => {
                 ev.preventDefault();
-                const f = {
-                    name: document.getElementById('d-name').value,
-                    eventDate: document.getElementById('d-date').value,
-                    budget: document.getElementById('d-budget').value,
-                    details: document.getElementById('d-details').value
-                };
                 try {
-                    await backend.updateGroup(gid, key, f);
-                    editingDetails = false;
-                    toast('Detalhes salvos');
+                    await backend.updateGroup(gid, key, readGroupForm(df));
+                    editing = false;
+                    toast('Salvo');
                     await refresh(true);
                 } catch (e) { document.getElementById('d-err').textContent = errMsg(e); }
             });
@@ -518,7 +519,7 @@ async function viewAdmin(gid, keyFromUrl) {
             const next = await backend.admin(gid, key);
             if (!force && (JSON.stringify(next) === last || isEditing())) { g = next; return; }
             g = next; saveAdmin(gid, { name: g.name }); render();
-        } catch (e) { toast(errMsg(e)); }
+        } catch (e) { toast(errMsg(e), 'circle-alert'); }
     }
 
     render();
@@ -534,38 +535,27 @@ async function viewInvite(gid) {
     const render = () => {
         last = JSON.stringify(g);
         const open = g.status === 'open';
-        $app.innerHTML = `
-            ${groupHeader(g)}
-            ${mine.length ? `
-                <div class="notice">
-                    Você já está neste grupo como ${mine.map(([mid, m]) => `<a href="#/me/${esc(mid)}"><b>${esc(m.name)}</b></a>`).join(', ')}.
-                    ${open ? 'Se quiser cadastrar outra pessoa neste aparelho, use o formulário abaixo.' : ''}
-                </div>` : ''}
-            ${open ? `
-                <section class="card">
-                    <h2>Entrar no amigo oculto</h2>
-                    <form id="join">
-                        <div class="field">
-                            <label for="j-name">Seu nome</label>
-                            <input id="j-name" type="text" maxlength="40" required autocomplete="name" placeholder="Como a turma te conhece">
-                        </div>
-                        <div class="field">
-                            <label for="j-wishes">Que livros você gostaria de ganhar? <span class="opt">(opcional, dá para editar depois)</span></label>
-                            <textarea id="j-wishes" maxlength="1000" placeholder="Gêneros e autores que você curte, títulos que estão na sua lista, e os que você já tem."></textarea>
-                        </div>
-                        <div class="actions"><button type="submit">Entrar no grupo</button></div>
+        paint(`
+            <div class="stack">
+                ${hero(g)}
+                ${mine.length ? `<div class="chips">${mine.map(([mid, m]) => `<a class="chip c-lilac" href="#/me/${esc(mid)}" style="text-decoration:none">${ic('user')}${esc(m.name)}${ic('arrow-right')}</a>`).join('')}</div>` : ''}
+                ${open ? `
+                    <form id="join" class="card stack">
+                        <label class="in">${ic('user')}<input name="name" type="text" maxlength="40" required autocomplete="name" placeholder="Seu nome" aria-label="Seu nome"></label>
+                        <label class="in top">${ic('heart')}<textarea name="wishes" maxlength="1000" placeholder="Livros, gêneros e autores que você curte" aria-label="Lista de desejos"></textarea></label>
+                        <button type="submit" class="wide">${ic('log-in')}Entrar</button>
                         <p class="error" id="j-err"></p>
-                    </form>
-                </section>` : `
+                    </form>` : `
+                    <section class="card center stack" style="justify-items:center">
+                        <span class="chip c-lilac" style="padding:12px">${ic('lock')}</span>
+                        <p>Sorteio já feito.</p>
+                        ${mine.length ? `<a class="btn" href="#/me/${esc(mine[0][0])}">${ic('gift')}Ver quem eu tirei</a>` : ''}
+                    </section>`}
                 <section class="card">
-                    <h2>O sorteio já foi feito</h2>
-                    <p class="muted">As inscrições estão fechadas. ${mine.length ? 'Abra a sua página para ver quem você tirou.' : 'Se você ficou de fora, fale com quem organizou.'}</p>
-                    ${mine.length ? `<a class="btn" href="#/me/${esc(mine[0][0])}">Ver quem eu tirei</a>` : ''}
-                </section>`}
-            <section class="card">
-                <h3>Quem já está no grupo (${g.members.length})</h3>
-                ${peopleList(g.members)}
-            </section>`;
+                    ${sectionTitle('users', `${g.members.length}`)}
+                    ${people(g.members)}
+                </section>
+            </div>`);
 
         const form = document.getElementById('join');
         if (!form) return;
@@ -573,12 +563,11 @@ async function viewInvite(gid) {
         form.addEventListener('submit', async ev => {
             ev.preventDefault();
             const btn = form.querySelector('button[type=submit]');
-            const name = document.getElementById('j-name').value;
-            const wishes = document.getElementById('j-wishes').value;
+            const name = form.elements.name.value;
             const key = newKey();
             btn.disabled = true;
             try {
-                const { id } = await backend.join(gid, name, wishes, key);
+                const { id } = await backend.join(gid, name, form.elements.wishes.value, key);
                 saveMember(id, { key, gid, groupName: g.name, name: name.trim(), fresh: true });
                 location.hash = `#/me/${id}`;
             } catch (e) {
@@ -593,7 +582,7 @@ async function viewInvite(gid) {
             const next = await backend.group(gid);
             if (JSON.stringify(next) === last || isEditing()) { g = next; return; }
             g = next; render();
-        } catch (e) { /* mantém a tela; tenta de novo no próximo ciclo */ }
+        } catch { /* tenta de novo no próximo ciclo */ }
     }
 
     render();
@@ -607,7 +596,7 @@ async function viewMe(mid, keyFromUrl) {
         history.replaceState(null, '', `#/me/${mid}`);
     }
     const key = members()[mid]?.key;
-    if (!key) return viewError('Este aparelho não tem a sua chave. Abra o seu link pessoal (o que apareceu quando você se cadastrou).');
+    if (!key) return viewError('Abra o seu link pessoal neste aparelho.');
 
     let data;
     try { data = await backend.me(mid, key); }
@@ -627,105 +616,99 @@ async function viewMe(mid, keyFromUrl) {
         last = JSON.stringify(data);
         const { group: g, me, target } = data;
         const open = g.status === 'open';
-        $app.innerHTML = `
-            ${groupHeader(g)}
-            <p><span class="pill go">você é ${esc(me.name)}</span></p>
+        paint(`
+            <div class="stack">
+                ${hero(g)}
 
-            ${fresh ? `
-                <section class="card">
-                    <h2>Você entrou! 🎉</h2>
-                    <p>Guarde o seu link pessoal: é por ele que você vai ver quem tirou, inclusive em outro aparelho.</p>
-                    ${copyBox('Seu link pessoal', meLink(mid, key), '<b>Não mande para ninguém</b>: quem tiver este link vê o seu sorteio.')}
-                </section>` : ''}
+                ${fresh ? `
+                    <section class="card stack" style="background:var(--butter);color:var(--butter-ink)">
+                        <p class="row"><b class="row">${ic('key-round')}Guarde seu link</b></p>
+                        ${copyRow(meLink(mid, key), 'link')}
+                        <p class="small">${ic('eye-off')} Não mande para ninguém: ele mostra o seu sorteio.</p>
+                    </section>` : ''}
 
-            <section class="card ${target ? 'center' : ''}">
                 ${target ? `
-                    <h2>Seu amigo oculto</h2>
-                    <div class="book ${opened ? 'open' : ''}" id="book">
-                        <div class="page">
-                            <span class="small muted">Você tirou</span>
-                            <span class="who">${esc(target.name)}</span>
-                            <span class="small muted" style="margin-top:10px">Bom garimpo! 📖</span>
+                    <section class="card center">
+                        <div class="book ${opened ? 'open' : ''}" id="book">
+                            <div class="page">
+                                <span class="muted small">Você tirou</span>
+                                <span class="who">${esc(target.name)}</span>
+                                ${ic('heart')}
+                            </div>
+                            <button type="button" class="cover" id="cover" aria-label="Abrir e ver quem você tirou">
+                                ${ic('gift')}
+                                <span class="tap">${ic('pointer')}toque</span>
+                            </button>
                         </div>
-                        <button type="button" class="cover" id="cover" aria-label="Abrir e ver quem você tirou">
-                            <span class="frame"></span>
-                            <span class="t">Quem você tirou?</span>
-                            <span class="small">Toque para abrir</span>
-                        </button>
-                    </div>
-                    <div id="target-wishes" class="${opened ? '' : 'hidden'}" style="text-align:left">
-                        <h3>O que ${esc(target.name)} gostaria de ganhar</h3>
-                        ${target.wishes ? `<p class="wishes">${esc(target.wishes)}</p>` : '<p class="muted">Ainda não escreveu nada. Dá uma olhada mais perto da data: a lista pode mudar.</p>'}
-                    </div>
+                        <div id="target-wishes" class="${opened ? '' : 'hidden'}" style="text-align:left;margin-top:16px">
+                            ${target.wishes ? `<p class="wishes">${esc(target.wishes)}</p>` : `<p class="muted small center">${ic('hourglass')} Lista vazia por enquanto.</p>`}
+                        </div>
+                    </section>
                 ` : `
-                    <h2>Esperando o sorteio</h2>
-                    <p class="muted">Quando quem organiza fizer o sorteio, o nome de quem você tirou aparece aqui. Esta página se atualiza sozinha.</p>
+                    <section class="card center stack waiting" style="justify-items:center">
+                        ${ic('hourglass')}
+                        <p class="muted">Aguardando o sorteio</p>
+                    </section>
                 `}
-            </section>
 
-            <section class="card">
-                <h3>Sua lista de desejos</h3>
-                ${editing ? `
-                    <form id="me-form">
-                        <div class="field">
-                            <label for="m-name">Seu nome</label>
-                            <input id="m-name" type="text" maxlength="40" value="${esc(me.name)}" ${open ? '' : 'disabled'}>
-                            ${open ? '' : '<p class="small muted" style="margin-top:6px">O nome não muda depois do sorteio.</p>'}
-                        </div>
-                        <div class="field">
-                            <label for="m-wishes">Livros que você gostaria de ganhar</label>
-                            <textarea id="m-wishes" maxlength="1000">${esc(me.wishes)}</textarea>
-                        </div>
-                        <div class="actions"><button type="submit">Salvar</button><button type="button" class="ghost" id="m-cancel">Cancelar</button></div>
-                        <p class="error" id="m-err"></p>
-                    </form>
-                ` : `
-                    ${me.wishes ? `<p class="wishes">${esc(me.wishes)}</p>` : '<p class="muted">Você ainda não escreveu nada. Ajude quem te tirou!</p>'}
-                    <div class="actions" style="margin-top:12px"><button type="button" class="ghost" id="m-edit">Editar</button></div>
-                `}
-                <p class="small muted" style="margin-top:10px">Quem tirou você vê esta lista${open ? ' depois do sorteio' : ''}.</p>
-            </section>
-
-            <section class="card">
-                <h3>No grupo (${g.members.length})</h3>
-                ${peopleList(g.members, m => m.id === me.id ? '<span class="pill">você</span>' : '')}
-                ${open ? `<div class="actions" style="margin-top:14px"><a class="btn ghost" href="#/g/${esc(gid)}">Link do convite</a><button type="button" class="link" id="leave">sair do grupo</button></div>` : ''}
-            </section>
-
-            ${fresh ? '' : `
                 <section class="card">
-                    <h3>Seu link pessoal</h3>
-                    ${copyBox('Para abrir em outro aparelho', meLink(mid, key), '<b>Não mande para ninguém</b>: quem tiver este link vê o seu sorteio.')}
-                </section>`}`;
-        bindCopies();
+                    ${sectionTitle('heart', 'Meus desejos', editing ? '' : `<button type="button" class="icon-btn sm plain" id="m-edit" title="Editar" aria-label="Editar">${ic('pencil')}</button>`)}
+                    ${editing ? `
+                        <form id="me-form" class="stack">
+                            <label class="in">${ic('user')}<input name="name" type="text" maxlength="40" value="${esc(me.name)}" aria-label="Seu nome" ${open ? '' : 'disabled title="O nome não muda depois do sorteio"'}></label>
+                            <label class="in top">${ic('heart')}<textarea name="wishes" maxlength="1000" aria-label="Lista de desejos" placeholder="Livros, gêneros e autores que você curte">${esc(me.wishes)}</textarea></label>
+                            <div class="row end">
+                                <button type="button" class="icon-btn plain" id="m-cancel" title="Cancelar" aria-label="Cancelar">${ic('x')}</button>
+                                <button type="submit" class="icon-btn" title="Salvar" aria-label="Salvar">${ic('check')}</button>
+                            </div>
+                            <p class="error" id="m-err"></p>
+                        </form>
+                    ` : me.wishes ? `<p class="wishes">${esc(me.wishes)}</p>` : `<p class="muted small">${ic('pencil')} Conte o que você gostaria de ganhar.</p>`}
+                </section>
+
+                <section class="card">
+                    ${sectionTitle('users', `${g.members.length}`)}
+                    ${people(g.members, { meId: me.id })}
+                </section>
+
+                <div id="my-key" class="card hidden">
+                    ${copyRow(meLink(mid, key), 'key-round')}
+                    <p class="muted small" style="margin-top:8px">${ic('eye-off')} Seu link pessoal. Não compartilhe.</p>
+                </div>
+
+                <div class="row center">
+                    <button type="button" class="icon-btn plain" data-toggle="my-key" title="Meu link pessoal" aria-label="Meu link pessoal">${ic('key-round')}</button>
+                    ${open ? `
+                        <button type="button" class="icon-btn plain" data-copy="${esc(inviteLink(gid))}" title="Copiar convite" aria-label="Copiar convite">${ic('share-2')}</button>
+                        <button type="button" class="icon-btn plain" id="leave" title="Sair do grupo" aria-label="Sair do grupo">${ic('log-out')}</button>` : ''}
+                </div>
+            </div>`);
 
         document.getElementById('cover')?.addEventListener('click', () => {
             opened = true;
             document.getElementById('book').classList.add('open');
             document.getElementById('target-wishes').classList.remove('hidden');
         });
-        document.getElementById('m-edit')?.addEventListener('click', () => { editing = true; render(); document.getElementById('m-wishes').focus(); });
+        document.getElementById('m-edit')?.addEventListener('click', () => { editing = true; render(); document.querySelector('#me-form textarea').focus(); });
         document.getElementById('m-cancel')?.addEventListener('click', () => { editing = false; render(); });
         const form = document.getElementById('me-form');
         if (form) {
             trackDirty(form);
             form.addEventListener('submit', async ev => {
                 ev.preventDefault();
-                const name = document.getElementById('m-name').value;
-                const wishes = document.getElementById('m-wishes').value;
                 try {
-                    await backend.updateMe(mid, key, name, wishes);
+                    await backend.updateMe(mid, key, form.elements.name.value, form.elements.wishes.value);
                     editing = false;
-                    toast('Lista salva');
+                    toast('Salvo');
                     await refresh(true);
                 } catch (e) { document.getElementById('m-err').textContent = errMsg(e); }
             });
         }
         const leave = document.getElementById('leave');
-        if (leave) confirmButton(leave, 'sair mesmo? toque de novo', async () => {
+        if (leave) confirmButton(leave, ic('check'), async () => {
             await backend.leave(mid, key);
             forgetMember(mid);
-            toast('Você saiu do grupo');
+            toast('Você saiu', 'log-out');
             location.hash = `#/g/${gid}`;
         });
     };
@@ -735,7 +718,7 @@ async function viewMe(mid, keyFromUrl) {
             const next = await backend.me(mid, key);
             if (!force && (JSON.stringify(next) === last || isEditing())) { data = next; return; }
             data = next; saveMember(mid, { groupName: data.group.name, name: data.me.name }); render();
-        } catch (e) { if (force) toast(errMsg(e)); }
+        } catch (e) { if (force) toast(errMsg(e), 'circle-alert'); }
     }
 
     render();
@@ -747,6 +730,7 @@ async function viewMe(mid, keyFromUrl) {
 // 5. INÍCIO
 // =========================================================================
 async function boot() {
+    drawIcons();
     const cfg = window.AO_CONFIG || {};
     if (cfg.supabaseUrl && cfg.supabaseAnonKey) {
         try {
@@ -754,8 +738,7 @@ async function boot() {
             setStatus(true, 'online');
         } catch (e) {
             console.error(e);
-            $app.innerHTML = '';
-            viewError('Não foi possível carregar a conexão com o servidor. Recarregue a página.');
+            viewError('Sem conexão com o servidor. Recarregue a página.');
             setStatus(false, 'offline');
             return;
         }

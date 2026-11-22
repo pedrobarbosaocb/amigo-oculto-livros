@@ -8,19 +8,20 @@ O organizador cria o grupo, manda o link do convite, cada pessoa se cadastra com
 - Acesso sem login: o navegador gera uma chave secreta para o organizador e para cada participante (o banco só guarda o hash). O **link pessoal** e o **link de organizador** levam a chave para abrir em outro aparelho.
 - Atualiza ao vivo (Realtime Broadcast, canal `ao-<grupo>`), com recarga a cada 20 s como reserva.
 
-## Deploy: GitHub Pages + Supabase (igual ao Rolê de Slides)
+## Deploy: Railway (front) + Supabase (banco)
 
-Site estático (`index.html` + `app.js`); o workflow gera `config.js` com as variáveis do repositório.
-Os dados ficam no schema privado `ao` do Supabase, fora da API REST (RLS ligado, sem políticas); o front só usa a chave pública (`anon`) e chama as funções RPC `ao_*` (`security definer`), que conferem as chaves e limitam abusos por IP.
+O front é estático (`index.html` + `app.js`) servido por um `server.js` em Node puro, sem dependências, que gera o `config.js` a partir das variáveis de ambiente.
+Os dados ficam no schema privado `ao` do Supabase, fora da API REST (RLS ligado, sem políticas). O front só usa a chave pública (`anon`) e chama as funções RPC `ao_*` (`security definer`), que conferem as chaves e limitam abusos por IP.
 
 1. No **SQL Editor** do projeto Supabase, rode os arquivos de `supabase/migrations/` em ordem (são idempotentes).
-2. Variáveis do repositório (*Settings → Secrets and variables → Actions → Variables*): `SUPABASE_URL` e `SUPABASE_ANON_KEY`.
-3. *Settings → Pages → Source: GitHub Actions*. Todo push na `main` publica.
+2. No Railway: *New Project → Deploy from GitHub repo* → este repositório. O Railway detecta o `package.json` e roda `npm start`.
+3. Variáveis do serviço no Railway: `SUPABASE_URL` e `SUPABASE_ANON_KEY`. Depois, em *Settings → Networking → Generate Domain*.
+4. Todo push na `main` publica de novo.
 
 Sem as variáveis, o site roda em **modo local** (dados só no navegador; bom para testar).
 
 ## Rodando local
 
 ```bash
-npx serve .    # ou: python -m http.server
+npm start      # http://localhost:3000 (modo local sem as variáveis)
 ```
